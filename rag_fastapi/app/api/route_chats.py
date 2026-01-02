@@ -66,6 +66,9 @@ async def load_history(col, user_id: str):
 
 @router.post("/v1/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
+    if settings.INTERNAL_KEY and x_internal_key != settings.INTERNAL_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
     db = get_db()
     col = db["messages"]  # ONE doc per user
 
@@ -188,3 +191,4 @@ async def chat(req: ChatRequest):
         effective_settings={"role": role, "tone": tone, "length": length},
         debug={"retrieved_cnt": r["retrieved_cnt"], "missing_text_cnt": r["missing_text_cnt"]}
     )
+
