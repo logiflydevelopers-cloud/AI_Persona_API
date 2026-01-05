@@ -177,7 +177,7 @@ def greeting_reply(role: str, tone: str, length: str) -> str:
         return base
 
     if length_key == "Short":
-        return base + " Ask me anything about the website data you’ve saved."
+        return base + " Ask me anything about the website data."
 
     if length_key == "Long":
         return (
@@ -193,5 +193,6 @@ def greeting_reply(role: str, tone: str, length: str) -> str:
         base
         + "\n\nTell me what you want to know — for example *pricing*, *policies*, *features*, or *how something works* — and I’ll guide you."
     )
+
 
 
