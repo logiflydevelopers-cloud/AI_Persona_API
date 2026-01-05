@@ -16,82 +16,82 @@ DEFAULT_ROLE = "Help Desk Specialist"
 DEFAULT_TONE = "Friendly"
 DEFAULT_LENGTH = "Short"
 
-MAX_MESSAGES_STORE = 300   # stored per user
+MAX_questionS_STORE = 300   # stored per user
 HISTORY_FOR_LLM = 50       # used for LLM history
 
 @router.get("/health")
 async def health():
     return {"ok": True}
 
-async def ensure_user_doc(col, user_id: str):
+async def ensure_user_doc(col, userId: str):
     await col.update_one(
-        {"_id": user_id},
+        {"_id": userId},
         {"$setOnInsert": {
-            "_id": user_id,
+            "_id": userId,
             "created_at": now(),
-            "messages": [],
+            "questions": [],
             "settings": {"role": DEFAULT_ROLE, "tone": DEFAULT_TONE, "length": DEFAULT_LENGTH},
             "usage": {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0},
         }, "$set": {"updated_at": now()}},
         upsert=True
     )
 
-async def reset_user(col, user_id: str):
+async def reset_user(col, userId: str):
     await col.update_one(
-        {"_id": user_id},
+        {"_id": userId},
         {"$set": {
-            "messages": [],
+            "questions": [],
             "usage": {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0},
             "updated_at": now(),
         }}
     )
 
-async def push_msg(col, user_id: str, role: str, content: str, base_url=None):
+async def push_msg(col, userId: str, role: str, content: str, base_url=None):
     msg = {"role": role, "content": content, "base_url": base_url, "created_at": now()}
     await col.update_one(
-        {"_id": user_id},
+        {"_id": userId},
         {"$set": {"updated_at": now()},
-         "$push": {"messages": {"$each": [msg], "$slice": -MAX_MESSAGES_STORE}}}
+         "$push": {"questions": {"$each": [msg], "$slice": -MAX_questionS_STORE}}}
     )
 
-async def load_doc(col, user_id: str):
-    return await col.find_one({"_id": user_id}) or {}
+async def load_doc(col, userId: str):
+    return await col.find_one({"_id": userId}) or {}
 
-async def load_history(col, user_id: str):
-    doc = await col.find_one({"_id": user_id}, {"messages": {"$slice": -HISTORY_FOR_LLM}, "settings": 1, "usage": 1})
+async def load_history(col, userId: str):
+    doc = await col.find_one({"_id": userId}, {"questions": {"$slice": -HISTORY_FOR_LLM}, "settings": 1, "usage": 1})
     doc = doc or {}
-    msgs = doc.get("messages", [])
+    msgs = doc.get("questions", [])
     history = [{"role": m.get("role"), "content": m.get("content")} for m in msgs]
     return history, doc
 
 @router.post("/v1/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):        
     db = get_db()
-    col = db["messages"]  # ONE doc per user
+    col = db["questions"]  # ONE doc per user
 
-    await ensure_user_doc(col, req.user_id)
+    await ensure_user_doc(col, req.userId)
 
     # reset chat if needed
     if req.reset:
-        await reset_user(col, req.user_id)
+        await reset_user(col, req.userId)
 
-    # ===== CASE 1: SETTINGS-ONLY payload (no message) =====
-    if not req.message or not req.message.strip():
+    # ===== CASE 1: SETTINGS-ONLY payload (no question) =====
+    if not req.question or not req.question.strip():
         if not (req.role and req.tone and req.length):
             raise HTTPException(
                 status_code=400,
-                detail="Settings payload must include role, tone, length (or send message for chat)."
+                detail="Settings payload must include role, tone, length (or send question for chat)."
             )
 
         await col.update_one(
-            {"_id": req.user_id},
+            {"_id": req.userId},
             {"$set": {
                 "settings": {"role": req.role, "tone": req.tone, "length": req.length},
                 "updated_at": now()
             }}
         )
 
-        doc = await load_doc(col, req.user_id)
+        doc = await load_doc(col, req.userId)
         usage = doc.get("usage", {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0})
 
         return ChatResponse(
@@ -103,7 +103,7 @@ async def chat(req: ChatRequest):
         )
 
     # ===== CASE 2: CHAT payload =====
-    history, doc = await load_history(col, req.user_id)
+    history, doc = await load_history(col, req.userId)
 
     # decide effective settings:
     # - if chat payload includes role/tone/length → use & store
@@ -117,20 +117,20 @@ async def chat(req: ChatRequest):
     # if chat request provided settings, persist them (optional but useful)
     if req.role or req.tone or req.length:
         await col.update_one(
-            {"_id": req.user_id},
+            {"_id": req.userId},
             {"$set": {"settings": {"role": role, "tone": tone, "length": length}, "updated_at": now()}}
         )
 
     # store user msg
-    await push_msg(col, req.user_id, "user", req.message.strip(), base_url=None)
+    await push_msg(col, req.userId, "user", req.question.strip(), base_url=None)
 
     # reload last history after push (optional)
-    history, doc = await load_history(col, req.user_id)
+    history, doc = await load_history(col, req.userId)
 
-    # RAG retrieve (namespace=user_id)
+    # RAG retrieve (namespace=userId)
     r = await retrieve_context(
-        user_id=req.user_id,
-        question=req.message.strip(),
+        userId=req.userId,
+        question=req.question.strip(),
         length=length,
         score_threshold=settings.DEFAULT_SCORE_THRESHOLD
     )
@@ -147,8 +147,8 @@ async def chat(req: ChatRequest):
             "['text','content','chunk','page_content','body']."
         )
 
-        await push_msg(col, req.user_id, "assistant", answer, base_url=r["base_url"])
-        await col.update_one({"_id": req.user_id}, {"$set": {"usage": usage, "updated_at": now()}})
+        await push_msg(col, req.userId, "assistant", answer, base_url=r["base_url"])
+        await col.update_one({"_id": req.userId}, {"$set": {"usage": usage, "updated_at": now()}})
 
         return ChatResponse(
             mode="chat",
@@ -168,7 +168,7 @@ async def chat(req: ChatRequest):
         system_prompt=system_prompt,
         context=r["context"],
         history=history,
-        question=req.message.strip(),
+        question=req.question.strip(),
         max_out=max_out
     )
 
@@ -176,8 +176,8 @@ async def chat(req: ChatRequest):
     usage["chat_out_tokens"] += int(out_tok)
     usage["total_cost_usd"] += float(calc_cost(chat_in=in_tok, chat_out=out_tok))
 
-    await push_msg(col, req.user_id, "assistant", ans, base_url=r["base_url"])
-    await col.update_one({"_id": req.user_id}, {"$set": {"usage": usage, "updated_at": now()}})
+    await push_msg(col, req.userId, "assistant", ans, base_url=r["base_url"])
+    await col.update_one({"_id": req.userId}, {"$set": {"usage": usage, "updated_at": now()}})
 
     return ChatResponse(
         mode="chat",
@@ -188,5 +188,6 @@ async def chat(req: ChatRequest):
         effective_settings={"role": role, "tone": tone, "length": length},
         debug={"retrieved_cnt": r["retrieved_cnt"], "missing_text_cnt": r["missing_text_cnt"]}
     )
+
 
 
