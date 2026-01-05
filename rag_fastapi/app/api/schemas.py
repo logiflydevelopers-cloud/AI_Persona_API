@@ -6,10 +6,10 @@ Tone = Literal["Friendly", "Professional", "Casual"]
 Length = Literal["Minimal", "Short", "Long", "Chatty"]
 
 class ChatRequest(BaseModel):
-    user_id: str = Field(..., min_length=1)
+    userID: str = Field(..., min_length=1)
 
     # payload-2 (chat)
-    message: Optional[str] = None
+    question: Optional[str] = None
 
     # payload-1 (settings)
     role: Optional[Role] = None
@@ -33,3 +33,4 @@ class ChatResponse(BaseModel):
     usage: Usage
     effective_settings: Dict[str, str] = {}
     debug: Dict[str, Any] = {}
+
