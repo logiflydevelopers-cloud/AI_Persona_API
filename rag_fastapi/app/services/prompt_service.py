@@ -131,3 +131,67 @@ def build_system_prompt(role: str, tone: str, length: str) -> str:
         "- Be concise and structured.\n"
         "- Use steps only when the user asks 'how to' or when troubleshooting.\n"
     )
+
+import re
+
+_GREETINGS = {
+    "hi", "hii", "hiii", "hello", "hey", "heyy", "hola",
+    "good morning", "good afternoon", "good evening",
+    "namaste", "yo"
+}
+
+def _norm(text: str) -> str:
+    t = (text or "").strip().lower()
+    t = re.sub(r"[^\w\s]", "", t)         # remove punctuation
+    t = re.sub(r"\s+", " ", t).strip()    # normalize spaces
+    return t
+
+def is_greeting(text: str) -> bool:
+    t = _norm(text)
+    if not t:
+        return False
+
+    # exact match or startswith greeting phrase
+    if t in _GREETINGS:
+        return True
+
+    for g in _GREETINGS:
+        if t.startswith(g + " "):
+            return True
+
+    return False
+
+def greeting_reply(role: str, tone: str, length: str) -> str:
+    # choose base line by tone
+    tone_key = (tone or "Friendly").strip()
+    if tone_key == "Professional":
+        base = "Hello! How may I assist you today?"
+    elif tone_key == "Casual":
+        base = "Hey! What can I help you with?"
+    else:
+        base = "Hi! 😊 How can I help you today?"
+
+    length_key = (length or "Short").strip()
+
+    if length_key == "Minimal":
+        return base
+
+    if length_key == "Short":
+        return base + " Ask me anything about the website data you’ve saved."
+
+    if length_key == "Long":
+        return (
+            base
+            + "\n\nYou can ask things like:\n"
+            + "1) Pricing / plans / features\n"
+            + "2) Policies (refund, shipping, privacy)\n"
+            + "3) Setup / troubleshooting steps"
+        )
+
+    # Chatty
+    return (
+        base
+        + "\n\nTell me what you want to know — for example *pricing*, *policies*, *features*, or *how something works* — and I’ll guide you."
+    )
+
+
