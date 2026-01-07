@@ -95,6 +95,7 @@ async def ensure_user_doc(col, user_id: str):
                     "total_tokens": 0,
                     "total_cost_usd": 0.0,
                 },
+                "mail": [],                 # ✅ ARRAY
                 "email_prompted": False,
             },
             "$set": {"updated_at": now()},
@@ -147,7 +148,13 @@ async def load_history(col, user_id: str):
     doc = (
         await col.find_one(
             {"_id": user_id},
-            {"messages": {"$slice": -HISTORY_FOR_LLM}, "settings": 1, "usage": 1, "mail": 1, "email_prompted": 1},
+            {
+                "messages": {"$slice": -HISTORY_FOR_LLM},
+                "settings": 1,
+                "usage": 1,
+                "mail": 1,
+                "email_prompted": 1,
+            },
         )
         or {}
     )
@@ -179,7 +186,12 @@ async def chat(req: ChatRequest):
 
         await col.update_one(
             {"_id": user_id},
-            {"$set": {"settings": {"role": req.role, "tone": req.tone, "length": req.length}, "updated_at": now()}},
+            {
+                "$set": {
+                    "settings": {"role": req.role, "tone": req.tone, "length": req.length},
+                    "updated_at": now(),
+                }
+            },
         )
 
         doc = await load_doc(col, user_id)
@@ -198,12 +210,17 @@ async def chat(req: ChatRequest):
     # Store user message
     await push_msg(col, user_id, "user", message)
 
-    # Silent email capture
+    # ======================================================
+    # EMAIL AUTO-CAPTURE (MULTIPLE, UNIQUE)
+    # ======================================================
     email = extract_email_from_text(message)
     if email:
         await col.update_one(
-            {"_id": user_id, "mail": {"$exists": False}},
-            {"$set": {"mail": email, "updated_at": now()}},
+            {"_id": user_id},
+            {
+                "$addToSet": {"mail": email},   # ✅ MULTIPLE SUPPORT
+                "$set": {"updated_at": now()},
+            },
         )
 
     # ======================================================
