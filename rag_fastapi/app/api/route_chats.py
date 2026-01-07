@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
+import re
+from typing import Optional
 
 from app.api.schemas import ChatRequest, ChatResponse, Usage
 from app.core.settings import settings
@@ -24,8 +26,45 @@ DEFAULT_ROLE = "Help Desk Specialist"
 DEFAULT_TONE = "Friendly"
 DEFAULT_LENGTH = "Short"
 
-MAX_MESSAGES_STORE = 300    # stored per user
-HISTORY_FOR_LLM = 50        # used for LLM history
+MAX_MESSAGES_STORE = 300
+HISTORY_FOR_LLM = 50
+
+
+# ======================================================
+# STRICT EMAIL VALIDATION
+# ======================================================
+EMAIL_REGEX = re.compile(
+    r"""
+    ^
+    (?![._-])
+    (?!.*[._-]{2})
+    [a-zA-Z0-9._-]{1,64}
+    (?<![._-])
+    @
+    (?!-)
+    (?:[a-zA-Z0-9-]{1,63}\.)+
+    [a-zA-Z]{2,63}
+    $
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def extract_email_from_text(text: str) -> Optional[str]:
+    if not text or "@" not in text:
+        return None
+
+    text = text.strip()
+
+    if EMAIL_REGEX.match(text):
+        return text.lower()
+
+    for token in text.split():
+        token = token.strip(".,;:()[]<>\"'")
+        if EMAIL_REGEX.match(token):
+            return token.lower()
+
+    return None
 
 
 @router.get("/health")
@@ -33,6 +72,9 @@ async def health():
     return {"ok": True}
 
 
+# ======================================================
+# DB HELPERS
+# ======================================================
 async def ensure_user_doc(col, user_id: str):
     await col.update_one(
         {"_id": user_id},
@@ -41,8 +83,19 @@ async def ensure_user_doc(col, user_id: str):
                 "_id": user_id,
                 "created_at": now(),
                 "messages": [],
-                "settings": {"role": DEFAULT_ROLE, "tone": DEFAULT_TONE, "length": DEFAULT_LENGTH},
-                "usage": {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0},
+                "settings": {
+                    "role": DEFAULT_ROLE,
+                    "tone": DEFAULT_TONE,
+                    "length": DEFAULT_LENGTH,
+                },
+                "usage": {
+                    "emb_tokens": 0,
+                    "chat_in_tokens": 0,
+                    "chat_out_tokens": 0,
+                    "total_tokens": 0,
+                    "total_cost_usd": 0.0,
+                },
+                "email_prompted": False,
             },
             "$set": {"updated_at": now()},
         },
@@ -56,7 +109,14 @@ async def reset_user(col, user_id: str):
         {
             "$set": {
                 "messages": [],
-                "usage": {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0},
+                "usage": {
+                    "emb_tokens": 0,
+                    "chat_in_tokens": 0,
+                    "chat_out_tokens": 0,
+                    "total_tokens": 0,
+                    "total_cost_usd": 0.0,
+                },
+                "email_prompted": False,
                 "updated_at": now(),
             }
         },
@@ -64,7 +124,12 @@ async def reset_user(col, user_id: str):
 
 
 async def push_msg(col, user_id: str, role: str, content: str, base_url=None):
-    msg = {"role": role, "content": content, "base_url": base_url, "created_at": now()}
+    msg = {
+        "role": role,
+        "content": content,
+        "base_url": base_url,
+        "created_at": now(),
+    }
     await col.update_one(
         {"_id": user_id},
         {
@@ -79,37 +144,38 @@ async def load_doc(col, user_id: str):
 
 
 async def load_history(col, user_id: str):
-    doc = await col.find_one(
-        {"_id": user_id},
-        {"messages": {"$slice": -HISTORY_FOR_LLM}, "settings": 1, "usage": 1},
-    ) or {}
+    doc = (
+        await col.find_one(
+            {"_id": user_id},
+            {"messages": {"$slice": -HISTORY_FOR_LLM}, "settings": 1, "usage": 1, "mail": 1, "email_prompted": 1},
+        )
+        or {}
+    )
 
-    msgs = doc.get("messages", [])
-    history = [{"role": m.get("role"), "content": m.get("content")} for m in msgs]
+    history = [{"role": m["role"], "content": m["content"]} for m in doc.get("messages", [])]
     return history, doc
 
 
+# ======================================================
+# CHAT API
+# ======================================================
 @router.post("/v1/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     db = get_db()
-    col = db["messages"]  # ONE doc per user
+    col = db["messages"]
 
     user_id = req.user_id
     message = (req.message or "").strip()
 
     await ensure_user_doc(col, user_id)
 
-    # reset chat if needed
     if req.reset:
         await reset_user(col, user_id)
 
-    # ===== CASE 1: SETTINGS-ONLY payload (no message) =====
+    # ===== SETTINGS ONLY =====
     if not message:
         if not (req.role and req.tone and req.length):
-            raise HTTPException(
-                status_code=400,
-                detail="Settings payload must include role, tone, length (or send question for chat).",
-            )
+            raise HTTPException(status_code=400, detail="Settings payload incomplete")
 
         await col.update_one(
             {"_id": user_id},
@@ -117,108 +183,95 @@ async def chat(req: ChatRequest):
         )
 
         doc = await load_doc(col, user_id)
-        usage = doc.get("usage", {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0})
-
         return ChatResponse(
             mode="settings",
             answer="Settings saved successfully.",
-            usage=Usage(**usage),
-            effective_settings=doc.get("settings", {"role": DEFAULT_ROLE, "tone": DEFAULT_TONE, "length": DEFAULT_LENGTH}),
+            usage=Usage(**doc["usage"]),
+            effective_settings=doc["settings"],
             debug={},
         )
 
-    # ===== CASE 2: CHAT payload =====
+    # ===== CHAT =====
     history, doc = await load_history(col, user_id)
+    usage = doc["usage"]
 
-    stored = doc.get("settings") or {"role": DEFAULT_ROLE, "tone": DEFAULT_TONE, "length": DEFAULT_LENGTH}
-    role = req.role or stored.get("role", DEFAULT_ROLE)
-    tone = req.tone or stored.get("tone", DEFAULT_TONE)
-    length = req.length or stored.get("length", DEFAULT_LENGTH)
+    # Store user message
+    await push_msg(col, user_id, "user", message)
 
-    # if chat request included settings, persist them (optional)
-    if req.role or req.tone or req.length:
+    # Silent email capture
+    email = extract_email_from_text(message)
+    if email:
         await col.update_one(
-            {"_id": user_id},
-            {"$set": {"settings": {"role": role, "tone": tone, "length": length}, "updated_at": now()}},
+            {"_id": user_id, "mail": {"$exists": False}},
+            {"$set": {"mail": email, "updated_at": now()}},
         )
 
-    usage = doc.get("usage", {"emb_tokens": 0, "chat_in_tokens": 0, "chat_out_tokens": 0, "total_cost_usd": 0.0})
-
-    # store user msg
-    await push_msg(col, user_id, "user", message, base_url=None)
-
-    # ✅ GREETING BYPASS (NO Pinecone / NO LLM)
+    # ======================================================
+    # GREETING + EMAIL ASK (ONCE)
+    # ======================================================
     if is_greeting(message):
-        answer = greeting_reply(role, tone, length)
-        await push_msg(col, user_id, "assistant", answer, base_url=None)
+        answer = greeting_reply(DEFAULT_ROLE, DEFAULT_TONE, DEFAULT_LENGTH)
+
+        if not doc.get("mail") and not doc.get("email_prompted"):
+            answer += (
+                "\n\nIf you'd like updates or a summary later, "
+                "you can share your email anytime — totally optional 😊"
+            )
+            await col.update_one(
+                {"_id": user_id},
+                {"$set": {"email_prompted": True, "updated_at": now()}},
+            )
+
+        await push_msg(col, user_id, "assistant", answer)
 
         return ChatResponse(
             mode="chat",
             answer=answer,
-            base_url=None,
-            sources=[],
             usage=Usage(**usage),
-            effective_settings={"role": role, "tone": tone, "length": length},
+            effective_settings=doc["settings"],
             debug={"small_talk": "greeting"},
         )
 
-    # reload history after storing user message
-    history, doc = await load_history(col, user_id)
-    usage = doc.get("usage", usage)
-
-    # RAG retrieve (namespace = user_id)
+    # ======================================================
+    # RAG FLOW
+    # ======================================================
     r = await retrieve_context(
         user_id=user_id,
         question=message,
-        length=length,
+        length=doc["settings"]["length"],
         score_threshold=settings.DEFAULT_SCORE_THRESHOLD,
     )
 
     usage["emb_tokens"] += int(r.get("emb_tokens") or 0)
     usage["total_cost_usd"] += float(calc_cost(emb_tokens=r.get("emb_tokens") or 0))
 
-    # no context => skip LLM
     if not (r.get("context") or "").strip():
-        answer = fallback_not_found(length)
-
-        await push_msg(col, user_id, "assistant", answer, base_url=r.get("base_url"))
+        usage["total_tokens"] = usage["emb_tokens"] + usage["chat_in_tokens"] + usage["chat_out_tokens"]
         await col.update_one({"_id": user_id}, {"$set": {"usage": usage, "updated_at": now()}})
-
-        return ChatResponse(
-            mode="chat",
-            answer=answer,
-            base_url=r.get("base_url"),
-            sources=(r.get("sources") or [])[:10],
-            usage=Usage(**usage),
-            effective_settings={"role": role, "tone": tone, "length": length},
-            debug={"retrieved_cnt": r.get("retrieved_cnt"), "missing_text_cnt": r.get("missing_text_cnt")},
-        )
-
-    # LLM answer
-    system_prompt = build_system_prompt(role, tone, length)
-    max_out = LENGTH_SETTINGS[length]["max_out"]
+        answer = fallback_not_found(doc["settings"]["length"])
+        await push_msg(col, user_id, "assistant", answer)
+        return ChatResponse(mode="chat", answer=answer, usage=Usage(**usage))
 
     ans, in_tok, out_tok = await answer_with_llm(
-        system_prompt=system_prompt,
+        system_prompt=build_system_prompt(**doc["settings"]),
         context=r["context"],
         history=history,
         question=message,
-        max_out=max_out,
+        max_out=LENGTH_SETTINGS[doc["settings"]["length"]]["max_out"],
     )
 
     usage["chat_in_tokens"] += int(in_tok or 0)
     usage["chat_out_tokens"] += int(out_tok or 0)
+    usage["total_tokens"] = usage["emb_tokens"] + usage["chat_in_tokens"] + usage["chat_out_tokens"]
     usage["total_cost_usd"] += float(calc_cost(chat_in=in_tok or 0, chat_out=out_tok or 0))
 
-    await push_msg(col, user_id, "assistant", ans, base_url=r.get("base_url"))
+    await push_msg(col, user_id, "assistant", ans)
     await col.update_one({"_id": user_id}, {"$set": {"usage": usage, "updated_at": now()}})
 
     return ChatResponse(
         mode="chat",
         answer=ans,
-        base_url=r.get("base_url"),
-        sources=(r.get("sources") or [])[:10],
         usage=Usage(**usage),
-        effective_settings={"role": role, "tone": tone, "length": length},
-        debug={"retrieved_cnt": r.get("retrieved_cnt"), "missing_text_cnt": r.get("missing_text_cnt")},
+        effective_settings=doc["settings"],
+        debug={},
     )
