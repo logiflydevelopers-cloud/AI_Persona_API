@@ -95,8 +95,7 @@ async def ensure_user_doc(col, user_id: str):
                     "total_tokens": 0,
                     "total_cost_usd": 0.0,
                 },
-                "mail": [],                 # ✅ ARRAY
-                "email_prompted": False,
+                "mail": [],
             },
             "$set": {"updated_at": now()},
         },
@@ -117,7 +116,6 @@ async def reset_user(col, user_id: str):
                     "total_tokens": 0,
                     "total_cost_usd": 0.0,
                 },
-                "email_prompted": False,
                 "updated_at": now(),
             }
         },
@@ -153,7 +151,6 @@ async def load_history(col, user_id: str):
                 "settings": 1,
                 "usage": 1,
                 "mail": 1,
-                "email_prompted": 1,
             },
         )
         or {}
@@ -161,6 +158,23 @@ async def load_history(col, user_id: str):
 
     history = [{"role": m["role"], "content": m["content"]} for m in doc.get("messages", [])]
     return history, doc
+
+
+# ======================================================
+# HELPER: APPEND EMAIL PROMPT ONLY ON FIRST BOT REPLY
+# ======================================================
+def append_email_prompt_if_first_reply(answer: str, doc: dict) -> str:
+    messages = doc.get("messages", [])
+    assistant_count = sum(1 for m in messages if m.get("role") == "assistant")
+
+    if assistant_count == 0:
+        return (
+            answer
+            + "\n\nIf you’d like updates, summaries, or want to add another email, "
+              "feel free to share your email 😊"
+        )
+
+    return answer
 
 
 # ======================================================
@@ -207,37 +221,29 @@ async def chat(req: ChatRequest):
     history, doc = await load_history(col, user_id)
     usage = doc["usage"]
 
-    # Store user message
+    # --------------------------------------------------
+    # STORE USER MESSAGE
+    # --------------------------------------------------
     await push_msg(col, user_id, "user", message)
 
-    # ======================================================
-    # EMAIL AUTO-CAPTURE (MULTIPLE, UNIQUE)
-    # ======================================================
+    # --------------------------------------------------
+    # EMAIL AUTO-CAPTURE (MULTIPLE + UNIQUE)
+    # --------------------------------------------------
     email = extract_email_from_text(message)
     if email:
         await col.update_one(
             {"_id": user_id},
-            {
-                "$addToSet": {"mail": email},   # ✅ MULTIPLE SUPPORT
-                "$set": {"updated_at": now()},
-            },
+            {"$addToSet": {"mail": email}, "$set": {"updated_at": now()}},
         )
 
-    # ======================================================
-    # GREETING + EMAIL ASK (ONCE)
-    # ======================================================
+    # --------------------------------------------------
+    # GREETING FLOW
+    # --------------------------------------------------
     if is_greeting(message):
-        answer = greeting_reply(DEFAULT_ROLE, DEFAULT_TONE, DEFAULT_LENGTH)
+        doc = await load_doc(col, user_id)
 
-        if not doc.get("mail") and not doc.get("email_prompted"):
-            answer += (
-                "\n\nIf you'd like updates or a summary later, "
-                "you can share your email anytime — totally optional 😊"
-            )
-            await col.update_one(
-                {"_id": user_id},
-                {"$set": {"email_prompted": True, "updated_at": now()}},
-            )
+        answer = greeting_reply(DEFAULT_ROLE, DEFAULT_TONE, DEFAULT_LENGTH)
+        answer = append_email_prompt_if_first_reply(answer, doc)
 
         await push_msg(col, user_id, "assistant", answer)
 
@@ -249,9 +255,9 @@ async def chat(req: ChatRequest):
             debug={"small_talk": "greeting"},
         )
 
-    # ======================================================
+    # --------------------------------------------------
     # RAG FLOW
-    # ======================================================
+    # --------------------------------------------------
     r = await retrieve_context(
         user_id=user_id,
         question=message,
@@ -263,10 +269,16 @@ async def chat(req: ChatRequest):
     usage["total_cost_usd"] += float(calc_cost(emb_tokens=r.get("emb_tokens") or 0))
 
     if not (r.get("context") or "").strip():
+        doc = await load_doc(col, user_id)
+
+        answer = fallback_not_found(doc["settings"]["length"])
+        answer = append_email_prompt_if_first_reply(answer, doc)
+
+        await push_msg(col, user_id, "assistant", answer)
+
         usage["total_tokens"] = usage["emb_tokens"] + usage["chat_in_tokens"] + usage["chat_out_tokens"]
         await col.update_one({"_id": user_id}, {"$set": {"usage": usage, "updated_at": now()}})
-        answer = fallback_not_found(doc["settings"]["length"])
-        await push_msg(col, user_id, "assistant", answer)
+
         return ChatResponse(mode="chat", answer=answer, usage=Usage(**usage))
 
     ans, in_tok, out_tok = await answer_with_llm(
@@ -281,6 +293,9 @@ async def chat(req: ChatRequest):
     usage["chat_out_tokens"] += int(out_tok or 0)
     usage["total_tokens"] = usage["emb_tokens"] + usage["chat_in_tokens"] + usage["chat_out_tokens"]
     usage["total_cost_usd"] += float(calc_cost(chat_in=in_tok or 0, chat_out=out_tok or 0))
+
+    doc = await load_doc(col, user_id)
+    ans = append_email_prompt_if_first_reply(ans, doc)
 
     await push_msg(col, user_id, "assistant", ans)
     await col.update_one({"_id": user_id}, {"$set": {"usage": usage, "updated_at": now()}})
