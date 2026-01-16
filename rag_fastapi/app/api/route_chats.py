@@ -25,6 +25,15 @@ def now():
 
 HISTORY_FOR_LLM = 50
 
+# =========================
+# DEFAULT SETTINGS (FALLBACK)
+# =========================
+DEFAULT_SETTINGS = {
+    "role": "Help Desk Specialist",
+    "tone": "Professional",
+    "length": "Short",
+}
+
 
 @router.get("/health")
 async def health():
@@ -76,9 +85,14 @@ async def chat(req: ChatRequest):
             {"_id": 0},
         )
 
+        effective_settings = {
+            **DEFAULT_SETTINGS,
+            **(settings_doc or {}),
+        }
+
         return ChatResponse(
             answer="Settings saved successfully.",
-            effective_settings=settings_doc or {},
+            effective_settings=effective_settings,
         )
 
     # =====================================================
@@ -87,6 +101,20 @@ async def chat(req: ChatRequest):
     message = (req.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
+
+    # Load settings (lead → org → defaults)
+    settings_doc = await settings_col.find_one(
+        {"userId": user_id, "leadId": lead_id},
+        {"_id": 0},
+    ) or await settings_col.find_one(
+        {"userId": user_id, "leadId": None},
+        {"_id": 0},
+    ) or {}
+
+    effective_settings = {
+        **DEFAULT_SETTINGS,
+        **settings_doc,
+    }
 
     # Store user message
     await chats_col.update_one(
@@ -109,27 +137,12 @@ async def chat(req: ChatRequest):
         upsert=True,
     )
 
-    # Load settings (lead → org fallback) ✅ FIXED
-    settings_doc = await settings_col.find_one(
-        {"userId": user_id, "leadId": lead_id},
-        {"_id": 0},
-    ) or await settings_col.find_one(
-        {"userId": user_id, "leadId": None},
-        {"_id": 0},
-    )
-
-    if not settings_doc:
-        raise HTTPException(
-            status_code=400,
-            detail="Chat settings not found for this lead",
-        )
-
     # Greeting shortcut
     if is_greeting(message):
         answer = greeting_reply(
-            settings_doc.get("role"),
-            settings_doc.get("tone"),
-            settings_doc.get("length"),
+            effective_settings["role"],
+            effective_settings["tone"],
+            effective_settings["length"],
         )
 
         await chats_col.update_one(
@@ -148,7 +161,7 @@ async def chat(req: ChatRequest):
 
         return ChatResponse(
             answer=answer,
-            effective_settings=settings_doc,
+            effective_settings=effective_settings,
             debug={"small_talk": "greeting"},
         )
 
@@ -162,19 +175,19 @@ async def chat(req: ChatRequest):
     r = await retrieve_context(
         user_id=user_id,
         question=message,
-        length=settings_doc["length"],
+        length=effective_settings["length"],
         score_threshold=settings.DEFAULT_SCORE_THRESHOLD,
     )
 
     if not (r.get("context") or "").strip():
-        answer = fallback_not_found(settings_doc["length"])
+        answer = fallback_not_found(effective_settings["length"])
     else:
         answer, _, _ = await answer_with_llm(
-            system_prompt=build_system_prompt(**settings_doc),
+            system_prompt=build_system_prompt(**effective_settings),
             context=r["context"],
             history=history,
             question=message,
-            max_out=LENGTH_SETTINGS[settings_doc["length"]]["max_out"],
+            max_out=LENGTH_SETTINGS[effective_settings["length"]]["max_out"],
         )
 
     # Store assistant reply
@@ -194,5 +207,5 @@ async def chat(req: ChatRequest):
 
     return ChatResponse(
         answer=answer,
-        effective_settings=settings_doc,
+        effective_settings=effective_settings,
     )
