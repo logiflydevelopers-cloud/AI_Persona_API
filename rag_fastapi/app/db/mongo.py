@@ -28,7 +28,9 @@ def get_db():
 def get_chats_collection():
     """
     Stores chat history
-    One document = userId + leadId + sessionId
+
+    One document = userId + leadId
+    One chat per lead
     """
     return get_db()["chats"]
 
@@ -36,6 +38,7 @@ def get_chats_collection():
 def get_chatsettings_collection():
     """
     Stores settings
+
     One document = userId + leadId
     """
     return get_db()["chatsettings"]
