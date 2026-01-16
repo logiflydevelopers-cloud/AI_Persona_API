@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
-from app.api.schemas import ChatRequest, ChatResponse, Usage
+from app.api.schemas import ChatRequest, ChatResponse
 from app.core.settings import settings
 from app.db.mongo import (
     get_chats_collection,
@@ -88,14 +88,13 @@ async def chat(req: ChatRequest):
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    # Store user message
+    # Store user message (FIXED)
     await chats_col.update_one(
         {"userId": user_id, "leadId": lead_id},
         {
             "$setOnInsert": {
                 "userId": user_id,
                 "leadId": lead_id,
-                "messages": [],
                 "createdAt": now(),
             },
             "$push": {
@@ -151,7 +150,7 @@ async def chat(req: ChatRequest):
             debug={"small_talk": "greeting"},
         )
 
-    # Load chat history (per lead)
+    # Load chat history
     chat_doc = await chats_col.find_one(
         {"userId": user_id, "leadId": lead_id}
     )
