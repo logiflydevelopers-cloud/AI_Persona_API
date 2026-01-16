@@ -88,7 +88,7 @@ async def chat(req: ChatRequest):
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    # Store user message (FIXED)
+    # Store user message
     await chats_col.update_one(
         {"userId": user_id, "leadId": lead_id},
         {
@@ -109,11 +109,13 @@ async def chat(req: ChatRequest):
         upsert=True,
     )
 
-    # Load settings (lead → org fallback)
+    # Load settings (lead → org fallback) ✅ FIXED
     settings_doc = await settings_col.find_one(
-        {"userId": user_id, "leadId": lead_id}
+        {"userId": user_id, "leadId": lead_id},
+        {"_id": 0},
     ) or await settings_col.find_one(
-        {"userId": user_id, "leadId": None}
+        {"userId": user_id, "leadId": None},
+        {"_id": 0},
     )
 
     if not settings_doc:
