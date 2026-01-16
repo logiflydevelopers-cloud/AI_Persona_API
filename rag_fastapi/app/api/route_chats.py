@@ -40,12 +40,21 @@ async def chat(req: ChatRequest):
     lead_id = req.lead_id
 
     # =====================================================
+    # AUTO-DETECT MODE
+    # =====================================================
+    is_settings_mode = req.settings is not None
+    is_chat_mode = bool(req.message)
+
+    if not is_settings_mode and not is_chat_mode:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid payload: provide message or settings",
+        )
+
+    # =====================================================
     # SETTINGS MODE
     # =====================================================
-    if req.mode == "settings":
-        if not req.settings:
-            raise HTTPException(400, "Settings payload missing")
-
+    if is_settings_mode:
         await settings_col.update_one(
             {"userId": user_id, "leadId": lead_id},
             {
@@ -68,31 +77,24 @@ async def chat(req: ChatRequest):
         )
 
         return ChatResponse(
-            mode="settings",
             answer="Settings saved successfully.",
             effective_settings=settings_doc or {},
         )
 
     # =====================================================
-    # CHAT MODE
+    # CHAT MODE (ONE CHAT PER LEAD)
     # =====================================================
-    if not req.session_id:
-        raise HTTPException(400, "sessionId is required")
-
     message = (req.message or "").strip()
     if not message:
-        raise HTTPException(400, "Message is required")
-
-    session_id = req.session_id
+        raise HTTPException(status_code=400, detail="Message is required")
 
     # Store user message
     await chats_col.update_one(
-        {"userId": user_id, "leadId": lead_id, "sessionId": session_id},
+        {"userId": user_id, "leadId": lead_id},
         {
             "$setOnInsert": {
                 "userId": user_id,
                 "leadId": lead_id,
-                "sessionId": session_id,
                 "messages": [],
                 "createdAt": now(),
             },
@@ -116,7 +118,10 @@ async def chat(req: ChatRequest):
     )
 
     if not settings_doc:
-        raise HTTPException(400, "Chat settings not found")
+        raise HTTPException(
+            status_code=400,
+            detail="Chat settings not found for this lead",
+        )
 
     # Greeting shortcut
     if is_greeting(message):
@@ -127,7 +132,7 @@ async def chat(req: ChatRequest):
         )
 
         await chats_col.update_one(
-            {"userId": user_id, "leadId": lead_id, "sessionId": session_id},
+            {"userId": user_id, "leadId": lead_id},
             {
                 "$push": {
                     "messages": {
@@ -141,15 +146,14 @@ async def chat(req: ChatRequest):
         )
 
         return ChatResponse(
-            mode="chat",
             answer=answer,
             effective_settings=settings_doc,
             debug={"small_talk": "greeting"},
         )
 
-    # Load history
+    # Load chat history (per lead)
     chat_doc = await chats_col.find_one(
-        {"userId": user_id, "leadId": lead_id, "sessionId": session_id}
+        {"userId": user_id, "leadId": lead_id}
     )
     history = (chat_doc.get("messages") or [])[-HISTORY_FOR_LLM:]
 
@@ -172,9 +176,9 @@ async def chat(req: ChatRequest):
             max_out=LENGTH_SETTINGS[settings_doc["length"]]["max_out"],
         )
 
-    # Store assistant message
+    # Store assistant reply
     await chats_col.update_one(
-        {"userId": user_id, "leadId": lead_id, "sessionId": session_id},
+        {"userId": user_id, "leadId": lead_id},
         {
             "$push": {
                 "messages": {
@@ -188,7 +192,6 @@ async def chat(req: ChatRequest):
     )
 
     return ChatResponse(
-        mode="chat",
         answer=answer,
         effective_settings=settings_doc,
     )
