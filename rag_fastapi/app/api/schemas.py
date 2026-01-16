@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Literal, Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List
 
 # =========================
 # ENUMS (Settings Only)
@@ -12,28 +12,16 @@ Role = Literal[
 Tone = Literal["Friendly", "Professional", "Casual"]
 Length = Literal["Minimal", "Short", "Long", "Chatty"]
 
-Mode = Literal["chat", "settings"]
-
 
 # =========================
 # REQUEST
 # =========================
 class ChatRequest(BaseModel):
     """
-    Single API payload
+    SINGLE API – AUTO-DETECTED INTENT
 
-    CHAT MODE:
+    SETTINGS PAYLOAD:
     {
-      "mode": "chat",
-      "userId": "Logifly",
-      "leadId": "lead.123",
-      "sessionId": "session_001",
-      "message": "Hi"
-    }
-
-    SETTINGS MODE:
-    {
-      "mode": "settings",
       "userId": "Logifly",
       "leadId": "lead.123",
       "settings": {
@@ -42,22 +30,25 @@ class ChatRequest(BaseModel):
         "length": "Short"
       }
     }
+
+    CHAT PAYLOAD:
+    {
+      "userId": "Logifly",
+      "leadId": "lead.123",
+      "message": "Hi"
+    }
     """
 
     model_config = ConfigDict(populate_by_name=True)
-
-    # Mode switch
-    mode: Mode = "chat"
 
     # Ownership (ALWAYS REQUIRED)
     user_id: str = Field(..., min_length=1, alias="userId")
     lead_id: str = Field(..., min_length=1, alias="leadId")
 
-    # Chat only
-    session_id: Optional[str] = Field(None, alias="sessionId")
+    # Chat (auto-detected)
     message: Optional[str] = Field(None, min_length=1)
 
-    # Settings only
+    # Settings (auto-detected)
     settings: Optional[Dict[str, Any]] = None
 
 
@@ -76,12 +67,9 @@ class Usage(BaseModel):
 # =========================
 class ChatResponse(BaseModel):
     """
-    mode:
-    - chat → assistant reply
-    - settings → confirmation
+    Unified response for both chat & settings
     """
 
-    mode: Mode
     answer: str
 
     base_url: Optional[str] = None
