@@ -47,7 +47,7 @@ class ChatRequest(BaseModel):
     lead_id: str = Field(..., min_length=1, alias="leadId")
 
     # Chat (auto-detected)
-    message: Optional[str] = Field(None, min_length=1)
+    message: Optional[str] = Field(None, min_length=1, alias="question")
 
     # Settings (auto-detected)
     settings: Optional[Dict[str, Any]] = None
@@ -82,4 +82,5 @@ class ChatResponse(BaseModel):
     effective_settings: Dict[str, Any] = {}
 
     debug: Dict[str, Any] = {}
+
 
