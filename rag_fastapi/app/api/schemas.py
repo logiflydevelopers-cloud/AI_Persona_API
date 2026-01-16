@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
+
 
 # =========================
 # ENUMS (Settings Only)
@@ -81,3 +82,4 @@ class ChatResponse(BaseModel):
     effective_settings: Dict[str, Any] = {}
 
     debug: Dict[str, Any] = {}
+
