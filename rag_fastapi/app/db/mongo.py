@@ -37,8 +37,9 @@ def get_chats_collection():
 
 def get_chatsettings_collection():
     """
-    Stores settings
+    Stores chat settings
 
-    One document = userId + leadId
+    One document = userId
+    Settings are org / main-user level
     """
     return get_db()["chatsettings"]
