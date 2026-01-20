@@ -48,9 +48,6 @@ async def chat(req: ChatRequest):
     user_id = req.user_id
     lead_id = req.lead_id
 
-    # =====================================================
-    # AUTO-DETECT MODE
-    # =====================================================
     is_settings_mode = req.settings is not None
     is_chat_mode = bool(req.message)
 
@@ -61,11 +58,11 @@ async def chat(req: ChatRequest):
         )
 
     # =====================================================
-    # SETTINGS MODE
+    # SETTINGS MODE (USER-LEVEL ONLY)
     # =====================================================
     if is_settings_mode:
         await settings_col.update_one(
-            {"userId": user_id, "leadId": lead_id},
+            {"userId": user_id},
             {
                 "$set": {
                     **req.settings,
@@ -73,7 +70,6 @@ async def chat(req: ChatRequest):
                 },
                 "$setOnInsert": {
                     "userId": user_id,
-                    "leadId": lead_id,
                     "createdAt": now(),
                 },
             },
@@ -81,13 +77,13 @@ async def chat(req: ChatRequest):
         )
 
         settings_doc = await settings_col.find_one(
-            {"userId": user_id, "leadId": lead_id},
+            {"userId": user_id},
             {"_id": 0},
-        )
+        ) or {}
 
         effective_settings = {
             **DEFAULT_SETTINGS,
-            **(settings_doc or {}),
+            **settings_doc,
         }
 
         return ChatResponse(
@@ -96,20 +92,27 @@ async def chat(req: ChatRequest):
         )
 
     # =====================================================
-    # CHAT MODE (ONE CHAT PER LEAD)
+    # CHAT MODE (LEAD REQUIRED)
     # =====================================================
     message = (req.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
+    if not lead_id:
+        raise HTTPException(status_code=400, detail="leadId is required for chat")
+
     # Load settings (lead → org → defaults)
-    settings_doc = await settings_col.find_one(
-        {"userId": user_id, "leadId": lead_id},
-        {"_id": 0},
-    ) or await settings_col.find_one(
-        {"userId": user_id, "leadId": None},
-        {"_id": 0},
-    ) or {}
+    settings_doc = (
+        await settings_col.find_one(
+            {"userId": user_id, "leadId": lead_id},
+            {"_id": 0},
+        )
+        or await settings_col.find_one(
+            {"userId": user_id},
+            {"_id": 0},
+        )
+        or {}
+    )
 
     effective_settings = {
         **DEFAULT_SETTINGS,
