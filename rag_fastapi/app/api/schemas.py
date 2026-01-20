@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Optional, Dict, Any, List, Literal
 
 
@@ -21,10 +21,9 @@ class ChatRequest(BaseModel):
     """
     SINGLE API – AUTO-DETECTED INTENT
 
-    SETTINGS PAYLOAD:
+    SETTINGS PAYLOAD (MAIN USER ONLY):
     {
       "userId": "Logifly",
-      "leadId": "lead.123",
       "settings": {
         "role": "Help Desk Specialist",
         "tone": "Professional",
@@ -36,21 +35,45 @@ class ChatRequest(BaseModel):
     {
       "userId": "Logifly",
       "leadId": "lead.123",
-      "message": "Hi"
+      "question": "Hi"
     }
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    # Ownership (ALWAYS REQUIRED)
+    # ALWAYS REQUIRED
     user_id: str = Field(..., min_length=1, alias="userId")
-    lead_id: str = Field(..., min_length=1, alias="leadId")
 
-    # Chat (auto-detected)
+    # CHAT ONLY
+    lead_id: Optional[str] = Field(None, min_length=1, alias="leadId")
     message: Optional[str] = Field(None, min_length=1, alias="question")
 
-    # Settings (auto-detected)
+    # SETTINGS ONLY
     settings: Optional[Dict[str, Any]] = None
+
+    # =========================
+    # VALIDATION
+    # =========================
+    @model_validator(mode="after")
+    def validate_intent(self):
+        # SETTINGS FLOW
+        if self.settings is not None:
+            if self.lead_id is not None:
+                raise ValueError("leadId is not allowed when updating settings")
+
+            if self.message is not None:
+                raise ValueError("message is not allowed when updating settings")
+
+            return self
+
+        # CHAT FLOW
+        if self.message is not None:
+            if not self.lead_id:
+                raise ValueError("leadId is required for chat messages")
+
+            return self
+
+        raise ValueError("Payload must contain either settings or message")
 
 
 # =========================
@@ -82,5 +105,3 @@ class ChatResponse(BaseModel):
     effective_settings: Dict[str, Any] = {}
 
     debug: Dict[str, Any] = {}
-
-
