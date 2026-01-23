@@ -96,7 +96,12 @@ def fallback_not_found(length: str) -> str:
     )
 
 
-def build_system_prompt(role: str, tone: str, length: str) -> str:
+def build_system_prompt(
+    role: str | None = None,
+    tone: str | None = None,
+    length: str | None = None,
+    **_: dict,   # 👈 absorbs userId and any future extras safely
+) -> str:
     role = (role or "Help Desk Specialist").strip()
     if role not in ROLE_PROMPTS:
         role = "Help Desk Specialist"
@@ -112,7 +117,6 @@ def build_system_prompt(role: str, tone: str, length: str) -> str:
     style = LENGTH_SETTINGS[length]["style"]
     fmt = LENGTH_SETTINGS[length].get("format", "")
 
-    # Strong policy: no hallucination, no guessing domain for relative URLs
     return (
         f"You are a {role}. {ROLE_PROMPTS[role]}\n"
         f"Tone: {tone_text}. {tone_rules}\n"
@@ -131,6 +135,7 @@ def build_system_prompt(role: str, tone: str, length: str) -> str:
         "- Be concise and structured.\n"
         "- Use steps only when the user asks 'how to' or when troubleshooting.\n"
     )
+
 
 import re
 
@@ -193,6 +198,7 @@ def greeting_reply(role: str, tone: str, length: str) -> str:
         base
         + "\n\nTell me what you want to know — for example *pricing*, *policies*, *features*, or *how something works* — and I’ll guide you."
     )
+
 
 
 
