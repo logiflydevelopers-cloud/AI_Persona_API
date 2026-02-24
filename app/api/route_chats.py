@@ -43,8 +43,8 @@ async def chat(req: ChatRequest):
     chats_col = get_chats_collection()
     settings_col = get_chatsettings_collection()
 
-    user_id = req.user_id
-    lead_id = req.lead_id
+    userId = req.userId
+    leadId = req.leadId
 
     is_settings_mode = req.settings is not None
     is_chat_mode = bool(req.message)
@@ -66,14 +66,14 @@ async def chat(req: ChatRequest):
         }
 
         await settings_col.update_one(
-            {"user_id": user_id},
+            {"userId": userId},
             {
                 "$set": {
                     **clean_settings,
                     "updated_at": now(),
                 },
                 "$setOnInsert": {
-                    "user_id": user_id,
+                    "userId": userId,
                     "created_at": now(),
                 },
             },
@@ -98,11 +98,11 @@ async def chat(req: ChatRequest):
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    if not lead_id:
+    if not leadId:
         raise HTTPException(status_code=400, detail="leadId is required")
 
     # Load settings
-    settings_doc = await settings_col.find_one({"user_id": user_id}) or {}
+    settings_doc = await settings_col.find_one({"userId": userId}) or {}
 
     effective_settings = {
         "role": settings_doc.get("role") or DEFAULT_SETTINGS["role"],
@@ -112,11 +112,11 @@ async def chat(req: ChatRequest):
 
     # Store user message
     await chats_col.update_one(
-        {"user_id": user_id, "lead_id": lead_id},
+        {"userId": userId, "leadId": leadId},
         {
             "$setOnInsert": {
-                "user_id": user_id,
-                "lead_id": lead_id,
+                "userId": userId,
+                "leadId": leadId,
                 "created_at": now(),
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
@@ -142,7 +142,7 @@ async def chat(req: ChatRequest):
         )
 
         await chats_col.update_one(
-            {"user_id": user_id, "lead_id": lead_id},
+            {"userId": userId, "leadId": leadId},
             {
                 "$push": {
                     "messages": {
@@ -163,13 +163,13 @@ async def chat(req: ChatRequest):
 
     # Load history
     chat_doc = await chats_col.find_one(
-        {"user_id": user_id, "lead_id": lead_id}
+        {"userId": userId, "leadId": leadId}
     )
     history = (chat_doc.get("messages") or [])[-HISTORY_FOR_LLM:]
 
     # RAG retrieval
     r = await retrieve_context(
-        user_id=user_id,
+        userId=userId,
         question=message,
         length=effective_settings["length"],
         score_threshold=settings.DEFAULT_SCORE_THRESHOLD,
@@ -207,7 +207,7 @@ async def chat(req: ChatRequest):
 
         # Store tokens inside chat doc
         await chats_col.update_one(
-            {"user_id": user_id, "lead_id": lead_id},
+            {"userId": userId, "leadId": leadId},
             {
                 "$inc": {
                     "total_input_tokens": token_data["input_tokens"],
@@ -228,7 +228,7 @@ async def chat(req: ChatRequest):
         update_payload["usage"] = usage_data.model_dump()
 
     await chats_col.update_one(
-        {"user_id": user_id, "lead_id": lead_id},
+        {"userId": userId, "leadId": leadId},
         {
             "$push": {"messages": update_payload},
             "$set": {"updated_at": now()},

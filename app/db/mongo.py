@@ -53,7 +53,7 @@ def get_db():
 
 def get_chats_collection():
     """
-    One document per (user_id, lead_id)
+    One document per (userId, leadId)
     Contains:
       - messages[]
       - total_input_tokens
@@ -65,7 +65,7 @@ def get_chats_collection():
 
 def get_chatsettings_collection():
     """
-    One document per user_id
+    One document per userId
     Stores org-level assistant settings.
     """
     return get_db()["chatsettings"]
@@ -87,13 +87,13 @@ async def init_indexes():
 
     # Unique chat per user + lead
     await chats.create_index(
-        [("user_id", 1), ("lead_id", 1)],
+        [("userId", 1), ("leadId", 1)],
         unique=True
     )
 
     # Fast lookup by user
     await chats.create_index(
-        [("user_id", 1)]
+        [("userId", 1)]
     )
 
     # Recent chats sorting
@@ -103,7 +103,7 @@ async def init_indexes():
 
     # Analytics: token aggregation queries
     await chats.create_index(
-        [("user_id", 1), ("updated_at", -1)]
+        [("userId", 1), ("updated_at", -1)]
     )
 
     # -----------------------------------------------------
@@ -111,7 +111,7 @@ async def init_indexes():
     # -----------------------------------------------------
 
     await settings_col.create_index(
-        [("user_id", 1)],
+        [("userId", 1)],
         unique=True
     )
 

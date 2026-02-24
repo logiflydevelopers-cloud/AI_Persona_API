@@ -75,7 +75,7 @@ async def embed_query(text: str):
 # =========================
 
 async def retrieve_context(
-    user_id: str,
+    userId: str,
     question: str,
     length: str,
     score_threshold: float
@@ -90,7 +90,7 @@ async def retrieve_context(
         pinecone_index.query,
         vector=q_vec,
         top_k=top_k,
-        namespace=str(user_id),
+        namespace=str(userId),
         include_metadata=True,
         include_values=False
     )

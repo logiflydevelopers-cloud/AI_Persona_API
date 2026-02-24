@@ -39,10 +39,10 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     # ALWAYS REQUIRED
-    user_id: str = Field(..., min_length=1, alias=["userId"])
+    userId: str = Field(..., min_length=1, alias=["userId"])
 
     # CHAT ONLY
-    lead_id: Optional[str] = Field(None, min_length=1, alias=["leadId"])
+    leadId: Optional[str] = Field(None, min_length=1, alias=["leadId"])
     message: Optional[str] = Field(None, min_length=1, alias="question")
 
     # SETTINGS ONLY
@@ -56,7 +56,7 @@ class ChatRequest(BaseModel):
 
         # SETTINGS FLOW
         if self.settings is not None:
-            if self.lead_id is not None:
+            if self.leadId is not None:
                 raise ValueError("leadId is not allowed when updating settings")
 
             if self.message is not None:
@@ -66,7 +66,7 @@ class ChatRequest(BaseModel):
 
         # CHAT FLOW
         if self.message is not None:
-            if not self.lead_id:
+            if not self.leadId:
                 raise ValueError("leadId is required for chat messages")
 
             return self
